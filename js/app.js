@@ -1,7 +1,7 @@
 // Reset — app controller: state, session lifecycle, screen rendering, interactions.
 import { $, $$, uid, now, esc, fmtClock, fmtHuman, fmtDate, fmtTime, monthKey, vibrate, toast } from './util.js';
 import * as db from './db.js';
-import { buildSeedTemplate } from './seed.js';
+import { buildSeedTemplate, seedBlocks, SEED_KEY, SEED_VERSION, SEED_NAME, SEED_DESCRIPTION } from './seed.js';
 import * as T from './timer.js';
 import * as photos from './photos.js';
 import { zipCreate, zipRead } from './zip.js';
@@ -51,9 +51,23 @@ async function boot() {
 async function ensureSeed() {
   const seeded = await db.metaGet('seededAt', null);
   const existing = await db.listTemplates();
-  if (!seeded && existing.length === 0) {
+  const builtin = existing.find((t) => t.isBuiltIn && (t.seedKey === SEED_KEY || t.name === SEED_NAME));
+
+  if (!builtin && !seeded && existing.length === 0) {
     await db.put('templates', buildSeedTemplate());
     await db.metaSet('seededAt', now());
+    return;
+  }
+  // Refresh the built-in to the current seed definition. Safe: built-ins are duplicate-only
+  // (never user-edited), and past sessions keep their own snapshot, so this touches nobody's data.
+  if (builtin && (builtin.seedVersion || 0) < SEED_VERSION) {
+    builtin.seedKey = SEED_KEY;
+    builtin.seedVersion = SEED_VERSION;
+    builtin.name = SEED_NAME;
+    builtin.description = SEED_DESCRIPTION;
+    builtin.blocks = seedBlocks();
+    builtin.updatedAt = now();
+    await db.put('templates', builtin);
   }
 }
 

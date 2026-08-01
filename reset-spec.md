@@ -352,7 +352,9 @@ Shown when the last block completes or the user ends the session early.
 
 Ship one built-in template, `isBuiltIn: true`, so the app is useful in the first 10 seconds without any setup.
 
-**Template: "Full House Reset"** — 15 blocks, ~6h 15m estimated. Ordered on three rules: start the machines first so they run in the background, tidy before vacuuming, vacuum before mopping.
+**Template: "Full House Reset"** — 16 blocks, ~6h 35m estimated. Ordered on three rules: start the machines first so they run in the background, tidy before vacuuming, vacuum before mopping.
+
+> Live seed is authoritative in [`js/seed.js`](js/seed.js) (versioned; `SEED_VERSION`). It adds **"Pool tidy"** (20m, photos both) right after #3 *Light the fire* — an outdoor task done while the fire burns. The table below is the original 15-block design; seed.js is what actually ships.
 
 | # | Title | Est. | Detail |
 |---|---|---|---|
