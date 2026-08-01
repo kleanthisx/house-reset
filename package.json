@@ -1,0 +1,13 @@
+{
+  "name": "house-reset",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reset — phone-first PWA for timed, photo-documented cleaning sessions. Vanilla static PWA, no build step.",
+  "scripts": {
+    "test": "node test/timer.test.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

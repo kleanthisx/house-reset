@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0c0e13">
+<meta name="description" content="Reset — timed, photo-documented cleaning sessions. Works offline.">
+<title>Reset</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Reset">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div id="app"><main class="screen"><p class="empty">Loading…</p></main></div>
+
+<!-- Single hidden capture input, re-targeted per shot. Native camera on mobile. -->
+<input type="file" id="capture" accept="image/*" capture="environment" hidden>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

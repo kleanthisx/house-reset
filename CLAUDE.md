@@ -1,22 +1,23 @@
 # Claude Code — House Reset
 
 **Project:** Reset — a phone-first PWA for timed, photo-documented work sessions (built for house cleaning, usable for any repeatable list).
-**Status:** v1 spec complete, ready to build. Nothing built yet.
-**Source of truth:** [`reset-spec.md`](reset-spec.md) — the full design & technical spec. Read it before implementing anything; it is authoritative over this file.
+**Status:** MVP build in progress (vanilla static PWA).
+**Source of truth:** [`reset-spec.md`](reset-spec.md) — the full design & technical spec. Authoritative on WHAT to build (data model, timer/photo/storage rules, screens, acceptance §9). This file overrides it only on the stack/hosting choice below.
 
-## Stack (from spec §2)
-- React + TypeScript + Vite
-- React Router · Zustand (or Context+reducer) · Tailwind (dark by default)
-- **IndexedDB via Dexie.js** — required, stores image Blobs
-- `vite-plugin-pwa` (Workbox) · `date-fns`
-- Installable PWA, phone-first (design at 390×844, desktop = centered column max 480px). No accounts, no backend in v1 — fully local & offline.
+## Stack — vanilla static PWA (DELIBERATE deviation from spec's *recommended* React/Vite)
+The spec §2 stack table is prefixed "Recommended stack (**substitute equivalents freely**, but keep the storage decisions)." We substitute — no framework, no build step — to match the user's proven pattern (`aqua-crystal`: plain HTML/CSS/JS PWA on Pages) and KISS/MVP working style. Adversarially reviewed & cleared before building.
+- **Plain HTML + CSS + vanilla ES modules.** No React, no Vite, no bundler, no npm build. The repo files *are* the deployed site.
+- **Raw IndexedDB** (hand-rolled wrapper in `js/db.js`) for all records incl. photo Blobs — NOT localStorage (note: aqua-crystal's `store.js` uses localStorage; do NOT copy that — Reset stores image blobs and must use IDB).
+- **Web Worker** (`js/photo-worker.js`) for photo resize via `createImageBitmap` + `OffscreenCanvas`.
+- Installable PWA, phone-first (390×844, desktop = centered column max 480px). Dark by default. No accounts/backend in v1 — fully local & offline.
+- File layout: `index.html`, `manifest.webmanifest`, `sw.js`, `.nojekyll`, `icon.svg` + PNG icons, `css/`, `js/`.
 
-## Hosting — GitHub Pages (installable web app)
-Ship as a static PWA on GitHub Pages; users "Add to Home Screen" to install. Local reference for the `vite-plugin-pwa` setup: `../gymos/vite.config.ts` (copy the VitePWA block, not its paths).
-- **Repo:** `house-reset` (public). **Live URL:** `https://<user>.github.io/house-reset/`. **Vite `base`: `/house-reset/`**.
-- **Project page gotcha:** served from `/house-reset/`, not root. `base: '/house-reset/'` in `vite.config`, and the PWA manifest `start_url`/`scope`/`id` + icon paths must live under that base (gymos uses `start_url: '/'` with no base — that only works for a root/user page; don't copy it verbatim).
-- **Routing:** use React Router **hash** history on Pages (no server rewrites, so browser-history deep links 404). Or add a `404.html` SPA fallback.
-- **Deploy:** GitHub Actions building `dist/` to Pages is the clean path (no local git remote here yet — `git init` + create the repo when we start). `git init` on request only.
+## Hosting — GitHub Pages, no build (push = live, once Pages is enabled)
+- **Repo:** `house-reset` (public) → **https://kleanthisx.github.io/house-reset/**. Pages source = branch **`main`, folder `/ (root)`**. No Actions, no `dist/`.
+- **Sub-path, not root:** served at `/house-reset/`. Handle it by using **relative paths everywhere** — manifest `start_url:"."`/`scope:"."`, relative `<link>`/`<script src>`, and **`navigator.serviceWorker.register('./sw.js')`** (absolute `/sw.js` → 404). No base config needed; this is why vanilla+relative sidesteps the Vite base gotcha entirely.
+- **`.nojekyll`** at root (Pages runs Jekyll by default and drops `_`-prefixed paths).
+- Icons: ship **192 & 512 PNG + maskable + `apple-touch-icon`** (iOS ignores SVG home-screen icons; Lighthouse PWA wants PNG), plus `icon.svg` for crisp Android.
+- **Enabling Pages is a required manual/API step — do not assume push = live until confirmed.**
 
 ## Non-negotiable rules (spec has the detail — don't paraphrase from memory)
 - **Never put photos in `localStorage`.** Blobs → IndexedDB only.

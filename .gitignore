@@ -7,3 +7,8 @@ dist-ssr/
 .env.*
 !.env.example
 .vite/
+
+# dev-only browser smoke test
+smoke.mjs
+
+package-lock.json
