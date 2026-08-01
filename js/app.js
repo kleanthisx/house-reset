@@ -4,6 +4,7 @@ import * as db from './db.js';
 import { buildSeedTemplate } from './seed.js';
 import * as T from './timer.js';
 import * as photos from './photos.js';
+import { zipCreate, zipRead } from './zip.js';
 
 // ---------------- State ----------------
 const S = {
@@ -87,6 +88,7 @@ function snapshotBlocks(template) {
 }
 
 async function startSession(template) {
+  if (!(await quotaGuard())) return; // blocked at >90% full unless user opts in
   const ts = now();
   S.session = {
     id: uid(),
@@ -539,11 +541,13 @@ function renderDetail() {
   const blocks = s.blocks.map((b) => {
     const el = T.elapsedMs(b);
     const tag = b.status === 'skipped' ? '<span class="tag">skipped</span>' : '';
+    const both = b.beforePhotoId && b.afterPhotoId;
     const pics = (b.beforePhotoId || b.afterPhotoId) ? `
-      <div class="pair-strip" data-pair="${b.id}">
-        ${b.beforePhotoId ? `<img data-photo="${b.beforePhotoId}" data-variant="thumb" data-full="${b.beforePhotoId}" alt="before">` : ''}
-        ${b.afterPhotoId ? `<img data-photo="${b.afterPhotoId}" data-variant="thumb" data-full="${b.afterPhotoId}" alt="after">` : ''}
-      </div>` : '';
+      <div class="pair-strip" ${both ? `data-compare="${b.id}"` : ''}>
+        ${b.beforePhotoId ? `<img data-photo="${b.beforePhotoId}" data-variant="thumb" ${both ? '' : `data-full="${b.beforePhotoId}"`} alt="before">` : ''}
+        ${b.afterPhotoId ? `<img data-photo="${b.afterPhotoId}" data-variant="thumb" ${both ? '' : `data-full="${b.afterPhotoId}"`} alt="after">` : ''}
+      </div>
+      ${both ? `<button class="btn small compare-btn" data-compare="${b.id}">Compare before / after</button>` : ''}` : '';
     return `
       <div class="detail-block">
         <div class="row-main">
@@ -608,9 +612,23 @@ function renderSettings() {
       <label class="toggle"><input type="checkbox" id="set-wake" ${th.wakeLock ? 'checked' : ''}> Keep screen awake during blocks</label>
       <label class="toggle"><input type="checkbox" id="set-haptics" ${th.haptics ? 'checked' : ''}> Haptics</label>
       <label class="toggle"><input type="checkbox" id="set-auto" ${th.autoAdvance ? 'checked' : ''}> Auto-advance after finishing a block</label>
+      <label class="field">Default photo mode for new blocks
+        <select id="set-photo">
+          <option value="both" ${opt('both', th.defaultPhotoMode)}>Before &amp; after</option>
+          <option value="before" ${opt('before', th.defaultPhotoMode)}>Before only</option>
+          <option value="after" ${opt('after', th.defaultPhotoMode)}>After only</option>
+          <option value="none" ${opt('none', th.defaultPhotoMode)}>No photos</option>
+        </select>
+      </label>
       <div class="card"><div id="storage-meter" class="hint">Checking storage…</div></div>
-      <p class="hint">Export / import and storage cleanup tools are coming next.</p>
-      <div class="version">Reset v0.1 · <a href="https://github.com/kleanthisx/house-reset" target="_blank" rel="noopener">source</a></div>
+      <div class="section-title">Your data</div>
+      <div class="action-col">
+        <button class="btn" data-act="export">Export all data (.zip)</button>
+        <button class="btn" data-act="import">Import from backup</button>
+        <input type="file" id="import-file" accept=".zip,application/zip" hidden>
+      </div>
+      <p class="hint">Everything is stored on this device only. Export makes a zip you can re-import on any device — merges by newest, never destructive.</p>
+      <div class="version">Reset v0.2 · <a href="https://github.com/kleanthisx/house-reset" target="_blank" rel="noopener">source</a></div>
     </main>`;
 }
 
@@ -683,6 +701,12 @@ function wireScreen() {
     delete: () => confirmDeleteSession(),
   });
   $$('[data-full]', c).forEach((el) => el.addEventListener('click', () => openPhoto(el.dataset.full)));
+  $$('[data-compare]', c).forEach((el) => el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const s = S.sessions.find((x) => x.id === S.detailId);
+    const b = s && s.blocks.find((x) => x.id === el.dataset.compare);
+    if (b) openCompare(b);
+  }));
 
   // Templates
   $$('[data-dup]', c).forEach((el) => el.addEventListener('click', () => duplicateTemplate(el.dataset.dup)));
@@ -693,6 +717,14 @@ function wireScreen() {
   bindCheck(c, 'set-wake', 'wakeLock');
   bindCheck(c, 'set-haptics', 'haptics');
   bindCheck(c, 'set-auto', 'autoAdvance');
+  const pm = $('#set-photo', c);
+  if (pm) pm.addEventListener('change', () => setSetting('defaultPhotoMode', pm.value));
+  bindAct(c, { export: () => exportAll(), import: () => $('#import-file', c).click() });
+  const imp = $('#import-file', c);
+  if (imp) imp.addEventListener('change', async () => {
+    const f = imp.files && imp.files[0]; imp.value = '';
+    if (f) await importFrom(f);
+  });
   if ($('#storage-meter', c)) updateStorageMeter();
 }
 
@@ -846,6 +878,11 @@ function applyTheme() {
   if (t === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
 }
+async function storagePct() {
+  if (!navigator.storage?.estimate) return 0;
+  const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+  return quota ? (usage / quota) * 100 : 0;
+}
 async function updateStorageMeter() {
   const el = $('#storage-meter');
   if (!el || !navigator.storage?.estimate) { if (el) el.textContent = 'Storage estimate unavailable'; return; }
@@ -853,7 +890,96 @@ async function updateStorageMeter() {
   const pct = quota ? Math.round((usage / quota) * 100) : 0;
   const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
   el.innerHTML = `Storage: ${mb(usage)} used${quota ? ` of ${mb(quota)} (${pct}%)` : ''}`;
-  if (pct >= 70) el.innerHTML += ` <span class="warn">— getting full</span>`;
+  if (pct >= 70) el.innerHTML += ` <span class="warn">— getting full, consider exporting</span>`;
+}
+
+// Blocking prompt before starting a new session when storage is nearly full (spec §5.4).
+function quotaGuard() {
+  return new Promise(async (resolve) => {
+    const pct = await storagePct();
+    if (pct < 90) { resolve(true); return; }
+    openModal(`
+      <h2>Storage is nearly full</h2>
+      <p>This device is ${Math.round(pct)}% full. New photos may fail to save. Export a backup and free space first, or start anyway.</p>
+      <div class="modal-actions col">
+        <button class="btn primary" data-act="export">Export a backup now</button>
+        <button class="btn" data-act="anyway">Start anyway</button>
+        <button class="btn ghost" data-act="dismiss">Cancel</button>
+      </div>`, async (act) => {
+      if (act === 'export') { await exportAll(); resolve(false); }
+      else resolve(act === 'anyway');
+    });
+  });
+}
+
+// ---- Export / Import (zip: data.json + photos) ----
+async function exportAll() {
+  toast('Building export…', { ms: 2000 });
+  const templates = await db.getAll('templates');
+  const sessions = await db.getAll('sessions');
+  const photoRecords = await db.getAll('photos');
+  const files = [];
+  const photoMeta = [];
+  for (const p of photoRecords) {
+    const fullBytes = new Uint8Array(await p.full.arrayBuffer());
+    const thumbBytes = new Uint8Array(await p.thumb.arrayBuffer());
+    files.push({ name: `photos/${p.id}-full.jpg`, data: fullBytes });
+    files.push({ name: `photos/${p.id}-thumb.jpg`, data: thumbBytes });
+    const { full, thumb, ...meta } = p; // strip blobs from the json
+    photoMeta.push(meta);
+  }
+  const data = { app: 'reset', version: 1, exportedAt: now(), templates, sessions, photos: photoMeta };
+  files.unshift({ name: 'data.json', data: new TextEncoder().encode(JSON.stringify(data)) });
+
+  const blob = zipCreate(files);
+  const stamp = new Date(now()).toISOString().slice(0, 10);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `reset-backup-${stamp}.zip`; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  toast('Backup downloaded');
+}
+
+async function importFrom(file) {
+  try {
+    toast('Reading backup…', { ms: 2000 });
+    const entries = zipRead(await file.arrayBuffer());
+    const byName = new Map(entries.map((e) => [e.name, e.data]));
+    const dataEntry = byName.get('data.json');
+    if (!dataEntry) throw new Error('No data.json in backup');
+    const data = JSON.parse(new TextDecoder().decode(dataEntry));
+
+    const mergeById = async (store, incoming) => {
+      let added = 0;
+      for (const rec of incoming || []) {
+        const cur = await db.get(store, rec.id);
+        if (!cur || (rec.updatedAt || 0) >= (cur.updatedAt || 0)) { await db.put(store, rec); added++; }
+      }
+      return added;
+    };
+    const t = await mergeById('templates', data.templates);
+    const s = await mergeById('sessions', data.sessions);
+
+    let photoCount = 0;
+    for (const meta of data.photos || []) {
+      if (await db.get('photos', meta.id)) continue; // photos are immutable
+      const fullBytes = byName.get(`photos/${meta.id}-full.jpg`);
+      const thumbBytes = byName.get(`photos/${meta.id}-thumb.jpg`);
+      if (!fullBytes || !thumbBytes) continue;
+      await db.put('photos', {
+        ...meta,
+        full: new Blob([fullBytes], { type: 'image/jpeg' }),
+        thumb: new Blob([thumbBytes], { type: 'image/jpeg' }),
+      });
+      photoCount++;
+    }
+    await reloadData();
+    render();
+    toast(`Imported ${t} templates, ${s} sessions, ${photoCount} photos`);
+  } catch (err) {
+    console.error(err);
+    toast('Import failed — is this a Reset backup?');
+  }
 }
 
 // ---------------- Modal ----------------
@@ -875,6 +1001,93 @@ async function openPhoto(photoId) {
   if (!url) return;
   openModal(`<div class="photo-view"><img src="${url}" alt="photo"></div>
     <div class="modal-actions"><button class="btn" data-act="dismiss">Close</button></div>`);
+}
+
+// Before/after comparison slider — the payoff moment (spec §5.3).
+async function openCompare(block) {
+  const beforeUrl = await photos.urlFor(block.beforePhotoId, 'full');
+  const afterUrl = await photos.urlFor(block.afterPhotoId, 'full');
+  if (!beforeUrl || !afterUrl) return;
+  openModal(`
+    <h2>${esc(block.title)}</h2>
+    <div class="compare" id="compare">
+      <img class="cmp-after" src="${afterUrl}" alt="after" draggable="false">
+      <img class="cmp-before" id="cmp-before" src="${beforeUrl}" alt="before" draggable="false">
+      <div class="cmp-handle" id="cmp-handle"><span>‹ ›</span></div>
+      <span class="cmp-tag left">Before</span>
+      <span class="cmp-tag right">After</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-act="dismiss">Close</button>
+      <button class="btn primary" data-act="share">Share image</button>
+    </div>`, async (act) => {
+    if (act === 'share') await shareCompare(block);
+  });
+
+  // Wire the drag. The "before" layer is clip-pathed to the divider; both layers stay aligned.
+  const wrap = $('#compare'); const before = $('#cmp-before'); const handle = $('#cmp-handle');
+  const set = (pct) => {
+    pct = Math.max(0, Math.min(100, pct));
+    before.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+    handle.style.left = pct + '%';
+  };
+  set(50);
+  const onMove = (clientX) => {
+    const r = wrap.getBoundingClientRect();
+    set(((clientX - r.left) / r.width) * 100);
+  };
+  const down = (e) => {
+    e.preventDefault();
+    const move = (ev) => onMove((ev.touches ? ev.touches[0] : ev).clientX);
+    const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+  };
+  wrap.addEventListener('pointerdown', (e) => { onMove(e.clientX); down(e); });
+}
+
+// Compose a labelled side-by-side JPEG and share it (Web Share API) or download it.
+async function shareCompare(block) {
+  const bp = await photos.getPhoto(block.beforePhotoId);
+  const ap = await photos.getPhoto(block.afterPhotoId);
+  if (!bp || !ap) return;
+  const [bImg, aImg] = await Promise.all([blobToImg(bp.full), blobToImg(ap.full)]);
+  const h = 900;
+  const bw = Math.round(bImg.width * (h / bImg.height));
+  const aw = Math.round(aImg.width * (h / aImg.height));
+  const pad = 24, labelH = 56;
+  const canvas = document.createElement('canvas');
+  canvas.width = bw + aw + pad * 3;
+  canvas.height = h + labelH + pad * 2;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0c0e13'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bImg, pad, pad, bw, h);
+  ctx.drawImage(aImg, pad * 2 + bw, pad, aw, h);
+  ctx.fillStyle = '#eef1f7'; ctx.font = '600 30px system-ui, sans-serif'; ctx.textBaseline = 'middle';
+  ctx.fillText('Before', pad + 6, pad + h + labelH / 2);
+  ctx.fillText('After', pad * 2 + bw + 6, pad + h + labelH / 2);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#99a1b3';
+  ctx.fillText(`${block.title} · ${fmtHuman(T.elapsedMs(block))}`, canvas.width - pad - 6, pad + h + labelH / 2);
+
+  const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.85));
+  const file = new File([blob], `reset-${block.title.replace(/\W+/g, '-').toLowerCase()}.jpg`, { type: 'image/jpeg' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: block.title }); return; } catch (_) {}
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = file.name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function blobToImg(blob) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = () => { res(img); };
+    img.onerror = rej;
+    img.src = url;
+  });
 }
 
 // ---------------- Image hydration (thumbs, strips) ----------------
