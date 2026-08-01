@@ -13,6 +13,7 @@ const S = {
   sessions: [],         // completed/abandoned, for history & home recents
   session: null,        // the active session (null if none)
   detailId: null,
+  draft: null,          // template being edited/created
   settings: { theme: 'system', wakeLock: true, haptics: true, autoAdvance: true, defaultPhotoMode: 'both' },
 };
 
@@ -328,6 +329,7 @@ function render() {
   else if (S.screen === 'history') c.innerHTML = renderHistory();
   else if (S.screen === 'detail') c.innerHTML = renderDetail();
   else if (S.screen === 'templates') c.innerHTML = renderTemplates();
+  else if (S.screen === 'templateEdit' && S.draft) c.innerHTML = renderTemplateEdit();
   else if (S.screen === 'settings') c.innerHTML = renderSettings();
   else c.innerHTML = renderHome();
   wireScreen();
@@ -352,8 +354,7 @@ function renderHome() {
         <button class="btn primary big" data-act="continue">Continue</button>
       </section>`;
   } else {
-    body += `<button class="btn primary big" data-act="pick">Start a session</button>`;
-    body += `<div class="list">`;
+    body += `<div class="section-title">Start a session</div><div class="list">`;
     for (const t of S.templates) {
       const est = t.blocks.reduce((s, b) => s + b.estimatedMinutes, 0);
       body += `
@@ -365,7 +366,7 @@ function renderHome() {
           <div class="chev">›</div>
         </button>`;
     }
-    body += `</div>`;
+    body += `</div><button class="btn ghost" data-nav="templates">Manage templates</button>`;
   }
 
   let recentHtml = '';
@@ -574,24 +575,73 @@ function renderDetail() {
     </main>`;
 }
 
-// ---- Templates (basic list; full editor lands next) ----
+// ---- Templates list ----
 function renderTemplates() {
-  let rows = S.templates.map((t) => {
+  const rows = S.templates.map((t) => {
     const est = t.blocks.reduce((s, b) => s + b.estimatedMinutes, 0);
     return `
       <div class="row static">
-        <div class="row-main">
+        <div class="row-main" ${t.isBuiltIn ? '' : `data-edit="${t.id}"`} style="${t.isBuiltIn ? '' : 'cursor:pointer'}">
           <div class="row-title">${esc(t.name)} ${t.isBuiltIn ? '<span class="tag">built-in</span>' : ''}</div>
           <div class="row-sub">${t.blocks.length} blocks · ~${fmtHuman(est * 60000)}</div>
         </div>
-        <button class="btn small" data-dup="${t.id}">Duplicate</button>
+        <div class="row-actions">
+          ${t.isBuiltIn ? '' : `<button class="btn small" data-edit="${t.id}">Edit</button>`}
+          <button class="btn small ghost" data-dup="${t.id}">Duplicate</button>
+        </div>
       </div>`;
   }).join('');
   return `
     ${header('Templates', { back: 'home' })}
     <main class="screen">
+      <button class="btn primary" data-act="new">＋ New template</button>
       <div class="list">${rows}</div>
-      <p class="hint">Full template editor (add / edit / reorder blocks) is coming next. For now you can duplicate a template and run it.</p>
+      <p class="hint">Built-in templates duplicate rather than edit, so the original stays intact.</p>
+    </main>`;
+}
+
+// ---- Template editor ----
+function renderTemplateEdit() {
+  const d = S.draft;
+  const total = d.blocks.reduce((s, b) => s + (Number(b.estimatedMinutes) || 0), 0);
+  const modeOpt = (v, cur) => `<option value="${v}" ${v === cur ? 'selected' : ''}>`;
+  const blocks = d.blocks.map((b, i) => `
+    <div class="edit-block" data-i="${i}">
+      <div class="edit-block-head">
+        <span class="eb-num">${i + 1}</span>
+        <input class="b-title" placeholder="Block title" value="${esc(b.title)}">
+        <button class="icon-btn small" data-moveup="${i}" ${i === 0 ? 'disabled' : ''}>▲</button>
+        <button class="icon-btn small" data-movedown="${i}" ${i === d.blocks.length - 1 ? 'disabled' : ''}>▼</button>
+      </div>
+      <textarea class="b-detail" rows="2" placeholder="What to do in this block…">${esc(b.detail || '')}</textarea>
+      <div class="edit-block-row">
+        <label class="mini">Est (min)<input class="b-min" type="number" inputmode="numeric" min="0" value="${Number(b.estimatedMinutes) || 0}"></label>
+        <label class="mini">Photos
+          <select class="b-mode">
+            ${modeOpt('both', b.photoMode)}Before &amp; after</option>
+            ${modeOpt('before', b.photoMode)}Before</option>
+            ${modeOpt('after', b.photoMode)}After</option>
+            ${modeOpt('none', b.photoMode)}None</option>
+          </select>
+        </label>
+        <button class="btn small ghost" data-dupblock="${i}">Duplicate</button>
+        <button class="btn small ghost danger" data-delblock="${i}">Delete</button>
+      </div>
+    </div>`).join('');
+
+  return `
+    ${header(d._isNew ? 'New template' : 'Edit template', { back: 'templates' })}
+    <main class="screen edit">
+      <label class="field">Name<input id="tpl-name" placeholder="e.g. Quick Kitchen" value="${esc(d.name)}"></label>
+      <label class="field">Description<input id="tpl-desc" placeholder="Optional" value="${esc(d.description || '')}"></label>
+      <div class="section-title">Blocks · <span id="tpl-total">~${fmtHuman(total * 60000)}</span></div>
+      <div class="edit-blocks">${blocks}</div>
+      <button class="btn" data-act="addblock">＋ Add block</button>
+      <div class="action-col">
+        <button class="btn primary big" data-act="savetpl">Save template</button>
+        <button class="btn ghost" data-nav="templates">Cancel</button>
+        ${d._isNew ? '' : `<button class="btn ghost danger" data-act="deltpl">Delete template</button>`}
+      </div>
     </main>`;
 }
 
@@ -708,8 +758,26 @@ function wireScreen() {
     if (b) openCompare(b);
   }));
 
-  // Templates
+  // Templates list
   $$('[data-dup]', c).forEach((el) => el.addEventListener('click', () => duplicateTemplate(el.dataset.dup)));
+  $$('[data-edit]', c).forEach((el) => el.addEventListener('click', () => editTemplate(el.dataset.edit)));
+  bindAct(c, { new: () => newTemplate() });
+
+  // Template editor
+  bindAct(c, {
+    addblock: () => { syncDraftFromDom(); addBlock(); },
+    savetpl: () => saveTemplate(),
+    deltpl: () => confirmDeleteTemplate(),
+  });
+  $$('[data-moveup]', c).forEach((el) => el.addEventListener('click', () => { syncDraftFromDom(); moveBlock(+el.dataset.moveup, -1); }));
+  $$('[data-movedown]', c).forEach((el) => el.addEventListener('click', () => { syncDraftFromDom(); moveBlock(+el.dataset.movedown, 1); }));
+  $$('[data-dupblock]', c).forEach((el) => el.addEventListener('click', () => { syncDraftFromDom(); dupBlock(+el.dataset.dupblock); }));
+  $$('[data-delblock]', c).forEach((el) => el.addEventListener('click', () => { syncDraftFromDom(); delBlock(+el.dataset.delblock); }));
+  // live total as minutes change (no full re-render, keeps focus)
+  $$('.b-min', c).forEach((el) => el.addEventListener('input', () => {
+    const total = $$('.b-min', c).reduce((s, i) => s + (Number(i.value) || 0), 0);
+    const t = $('#tpl-total', c); if (t) t.textContent = '~' + fmtHuman(total * 60000);
+  }));
 
   // Settings
   const theme = $('#set-theme', c);
@@ -832,6 +900,89 @@ function confirmDeleteSession() {
     if (s) { s.deletedAt = now(); s.updatedAt = now(); await db.put('sessions', s); }
     await reloadData();
     go('history');
+  });
+}
+
+// ---- Template editor state + mutations ----
+function blankBlock() {
+  return { id: uid(), title: '', detail: '', estimatedMinutes: 15, order: 0, photoMode: S.settings.defaultPhotoMode, tags: [] };
+}
+function newTemplate() {
+  const ts = now();
+  S.draft = {
+    id: uid(), name: '', description: '', isBuiltIn: false,
+    createdAt: ts, updatedAt: ts, deletedAt: null, syncedAt: null,
+    blocks: [blankBlock()], _isNew: true,
+  };
+  go('templateEdit');
+}
+function editTemplate(id) {
+  const t = S.templates.find((x) => x.id === id);
+  if (!t) return;
+  S.draft = structuredClone(t);
+  S.draft._isNew = false;
+  go('templateEdit');
+}
+// Pull the current DOM field values into the draft (call before any structural change).
+function syncDraftFromDom() {
+  const c = app();
+  const name = $('#tpl-name', c); if (name) S.draft.name = name.value;
+  const desc = $('#tpl-desc', c); if (desc) S.draft.description = desc.value;
+  $$('.edit-block', c).forEach((el) => {
+    const i = +el.dataset.i;
+    const b = S.draft.blocks[i];
+    if (!b) return;
+    b.title = $('.b-title', el).value;
+    b.detail = $('.b-detail', el).value;
+    b.estimatedMinutes = Number($('.b-min', el).value) || 0;
+    b.photoMode = $('.b-mode', el).value;
+  });
+}
+function addBlock() { S.draft.blocks.push(blankBlock()); render(); }
+function delBlock(i) {
+  if (S.draft.blocks.length <= 1) { toast('A template needs at least one block'); return; }
+  S.draft.blocks.splice(i, 1); render();
+}
+function dupBlock(i) {
+  const copy = { ...structuredClone(S.draft.blocks[i]), id: uid() };
+  S.draft.blocks.splice(i + 1, 0, copy); render();
+}
+function moveBlock(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= S.draft.blocks.length) return;
+  const bs = S.draft.blocks;
+  [bs[i], bs[j]] = [bs[j], bs[i]];
+  render();
+}
+async function saveTemplate() {
+  syncDraftFromDom();
+  const d = S.draft;
+  if (!d.name.trim()) { toast('Give the template a name'); return; }
+  d.blocks = d.blocks.map((b, i) => ({ ...b, order: i, estimatedMinutes: Number(b.estimatedMinutes) || 0 }));
+  d.updatedAt = now();
+  delete d._isNew;
+  await db.put('templates', d);
+  S.draft = null;
+  await reloadData();
+  go('templates');
+  toast('Template saved');
+}
+function confirmDeleteTemplate() {
+  openModal(`
+    <h2>Delete this template?</h2>
+    <p>Past sessions that used it are unaffected (they keep their own copy).</p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-act="dismiss">Cancel</button>
+      <button class="btn danger" data-act="yes">Delete</button>
+    </div>`, async (act) => {
+    if (act !== 'yes') return;
+    S.draft.deletedAt = now();
+    S.draft.updatedAt = now();
+    delete S.draft._isNew;
+    await db.put('templates', S.draft);
+    S.draft = null;
+    await reloadData();
+    go('templates');
   });
 }
 
