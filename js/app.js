@@ -601,9 +601,27 @@ function renderTemplates() {
 }
 
 // ---- Template editor ----
+function computeActuals(templateId) {
+  const agg = new Map(); // templateBlockId -> {sum,count}
+  for (const s of S.sessions) {
+    if (s.templateId !== templateId || s.status !== 'completed') continue;
+    for (const b of s.blocks) {
+      if (b.status !== 'done') continue;
+      const ms = T.elapsedMs(b);
+      if (ms <= 0) continue;
+      const e = agg.get(b.templateBlockId) || { sum: 0, count: 0 };
+      e.sum += ms; e.count++; agg.set(b.templateBlockId, e);
+    }
+  }
+  const out = new Map();
+  for (const [k, v] of agg) out.set(k, Math.max(1, Math.round(v.sum / v.count / 60000)));
+  return out;
+}
+
 function renderTemplateEdit() {
   const d = S.draft;
   const total = d.blocks.reduce((s, b) => s + (Number(b.estimatedMinutes) || 0), 0);
+  const actuals = d._isNew ? new Map() : computeActuals(d.id);
   const modeOpt = (v, cur) => `<option value="${v}" ${v === cur ? 'selected' : ''}>`;
   const blocks = d.blocks.map((b, i) => `
     <div class="edit-block" data-i="${i}">
@@ -616,6 +634,7 @@ function renderTemplateEdit() {
       <textarea class="b-detail" rows="2" placeholder="What to do in this block…">${esc(b.detail || '')}</textarea>
       <div class="edit-block-row">
         <label class="mini">Est (min)<input class="b-min" type="number" inputmode="numeric" min="0" value="${Number(b.estimatedMinutes) || 0}"></label>
+        ${actuals.has(b.id) ? `<span class="mini actual">avg actual<strong>${actuals.get(b.id)}m</strong></span>` : ''}
         <label class="mini">Photos
           <select class="b-mode">
             ${modeOpt('both', b.photoMode)}Before &amp; after</option>
@@ -637,6 +656,7 @@ function renderTemplateEdit() {
       <div class="section-title">Blocks · <span id="tpl-total">~${fmtHuman(total * 60000)}</span></div>
       <div class="edit-blocks">${blocks}</div>
       <button class="btn" data-act="addblock">＋ Add block</button>
+      ${actuals.size ? `<button class="btn" data-act="learnest">Update estimates to your actual times</button>` : ''}
       <div class="action-col">
         <button class="btn primary big" data-act="savetpl">Save template</button>
         <button class="btn ghost" data-nav="templates">Cancel</button>
@@ -768,6 +788,7 @@ function wireScreen() {
     addblock: () => { syncDraftFromDom(); addBlock(); },
     savetpl: () => saveTemplate(),
     deltpl: () => confirmDeleteTemplate(),
+    learnest: () => { syncDraftFromDom(); applyActualEstimates(); },
   });
   $$('[data-moveup]', c).forEach((el) => el.addEventListener('click', () => { syncDraftFromDom(); moveBlock(+el.dataset.moveup, -1); }));
   $$('[data-movedown]', c).forEach((el) => el.addEventListener('click', () => { syncDraftFromDom(); moveBlock(+el.dataset.movedown, 1); }));
@@ -954,6 +975,16 @@ function moveBlock(i, dir) {
   [bs[i], bs[j]] = [bs[j], bs[i]];
   render();
 }
+function applyActualEstimates() {
+  const actuals = computeActuals(S.draft.id);
+  let changed = 0;
+  for (const b of S.draft.blocks) {
+    if (actuals.has(b.id)) { b.estimatedMinutes = actuals.get(b.id); changed++; }
+  }
+  render();
+  toast(changed ? `Updated ${changed} estimates — remember to Save` : 'No actual times yet');
+}
+
 async function saveTemplate() {
   syncDraftFromDom();
   const d = S.draft;

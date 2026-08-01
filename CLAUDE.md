@@ -1,7 +1,7 @@
 # Claude Code — House Reset
 
 **Project:** Reset — a phone-first PWA for timed, photo-documented work sessions (built for house cleaning, usable for any repeatable list).
-**Status:** MVP build in progress (vanilla static PWA).
+**Status:** v1 core complete & live — https://kleanthisx.github.io/house-reset/ . See [`STATUS.md`](STATUS.md) for what's built, how to test, and the acceptance checklist.
 **Source of truth:** [`reset-spec.md`](reset-spec.md) — the full design & technical spec. Authoritative on WHAT to build (data model, timer/photo/storage rules, screens, acceptance §9). This file overrides it only on the stack/hosting choice below.
 
 ## Stack — vanilla static PWA (DELIBERATE deviation from spec's *recommended* React/Vite)
